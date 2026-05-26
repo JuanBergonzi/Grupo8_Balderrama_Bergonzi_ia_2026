@@ -12,15 +12,15 @@ class RoverProblem(SearchProblem):
         muestras_sedimentarias
     ):
 
-        # ---------------------------------------------
+        # =================================================
         # ZONAS DE SOMBRA
-        # ---------------------------------------------
+        # =================================================
 
         self.zonas_sombra = set(zonas_sombra)
 
-        # ---------------------------------------------
+        # =================================================
         # MUESTRAS
-        # ---------------------------------------------
+        # =================================================
 
         self.muestras = {}
 
@@ -30,9 +30,9 @@ class RoverProblem(SearchProblem):
         for m in muestras_sedimentarias:
             self.muestras[m] = "sedimentaria"
 
-        # ---------------------------------------------
-        # LÍMITES DEL MAPA
-        # ---------------------------------------------
+        # =================================================
+        # LIMITES DEL MAPA
+        # =================================================
 
         todos = (
             [rover_inicio]
@@ -44,7 +44,11 @@ class RoverProblem(SearchProblem):
         filas = [f for f, c in todos]
         columnas = [c for f, c in todos]
 
-        margen = 5
+        # =================================================
+        # MAPA REDUCIDO
+        # =================================================
+
+        margen = 1
 
         self.min_f = min(filas) - margen
         self.max_f = max(filas) + margen
@@ -52,17 +56,9 @@ class RoverProblem(SearchProblem):
         self.min_c = min(columnas) - margen
         self.max_c = max(columnas) + margen
 
-        # ---------------------------------------------
+        # =================================================
         # ESTADO INICIAL
-        # ---------------------------------------------
-        #
-        # (
-        #   posicion,
-        #   bateria,
-        #   taladro,
-        #   carga,
-        #   muestras_restantes
-        # )
+        # =================================================
 
         estado_inicial = (
             rover_inicio,
@@ -99,9 +95,9 @@ class RoverProblem(SearchProblem):
             (0, 1)
         ]
 
-        # ---------------------------------------------
+        # =================================================
         # MOVIMIENTO NORMAL
-        # ---------------------------------------------
+        # =================================================
 
         for df, dc in direcciones:
 
@@ -116,13 +112,59 @@ class RoverProblem(SearchProblem):
 
             if bateria > 1 and dentro_limites:
 
-                acciones.append(
-                    ("moverse", (nf, nc))
-                )
+                if restantes:
 
-        # ---------------------------------------------
+                    dist_actual = min(
+                        abs(fila - rf) + abs(col - rc)
+                        for rf, rc in restantes
+                    )
+
+                    nueva_dist = min(
+                        abs(nf - rf) + abs(nc - rc)
+                        for rf, rc in restantes
+                    )
+
+                    # =====================================
+                    # SI SOBREMARCHA HACE LO MISMO O MEJOR,
+                    # NO CAMINAR
+                    # =====================================
+
+                    sf = fila + 2 * df
+                    sc = col + 2 * dc
+
+                    sobremarcha_valida = (
+                        bateria > 4
+                        and
+                        self.min_f <= sf <= self.max_f
+                        and
+                        self.min_c <= sc <= self.max_c
+                    )
+
+                    if sobremarcha_valida:
+
+                        dist_sobremarcha = min(
+                            abs(sf - rf) + abs(sc - rc)
+                            for rf, rc in restantes
+                        )
+
+                        if dist_sobremarcha <= nueva_dist:
+                            continue
+
+                    if nueva_dist <= dist_actual:
+
+                        acciones.append(
+                            ("moverse", (nf, nc))
+                        )
+
+                else:
+
+                    acciones.append(
+                        ("moverse", (nf, nc))
+                    )
+
+        # =================================================
         # SOBREMARCHA
-        # ---------------------------------------------
+        # =================================================
 
         for df, dc in direcciones:
 
@@ -137,13 +179,33 @@ class RoverProblem(SearchProblem):
 
             if bateria > 4 and dentro_limites:
 
-                acciones.append(
-                    ("sobremarcha", (nf, nc))
-                )
+                if restantes:
 
-        # ---------------------------------------------
+                    dist_actual = min(
+                        abs(fila - rf) + abs(col - rc)
+                        for rf, rc in restantes
+                    )
+
+                    nueva_dist = min(
+                        abs(nf - rf) + abs(nc - rc)
+                        for rf, rc in restantes
+                    )
+
+                    if nueva_dist <= dist_actual:
+
+                        acciones.append(
+                            ("sobremarcha", (nf, nc))
+                        )
+
+                else:
+
+                    acciones.append(
+                        ("sobremarcha", (nf, nc))
+                    )
+
+        # =================================================
         # EQUIPAR TALADRO
-        # ---------------------------------------------
+        # =================================================
 
         if taladro != "termico" and bateria > 1:
 
@@ -157,9 +219,9 @@ class RoverProblem(SearchProblem):
                 ("equipar", "percusion")
             )
 
-        # ---------------------------------------------
+        # =================================================
         # RECOLECTAR
-        # ---------------------------------------------
+        # =================================================
 
         if posicion in restantes and carga < 2 and bateria > 3:
 
@@ -175,9 +237,9 @@ class RoverProblem(SearchProblem):
                     ("recolectar", tipo)
                 )
 
-        # ---------------------------------------------
+        # =================================================
         # DEPOSITAR
-        # ---------------------------------------------
+        # =================================================
 
         if carga > 0 and bateria > 1:
 
@@ -189,11 +251,15 @@ class RoverProblem(SearchProblem):
                     ("depositar", None)
                 )
 
-        # ---------------------------------------------
+        # =================================================
         # RECARGAR
-        # ---------------------------------------------
+        # =================================================
 
-        if posicion not in self.zonas_sombra and bateria < 20:
+        if (
+            posicion not in self.zonas_sombra
+            and
+            bateria <= 5
+        ):
 
             acciones.append(
                 ("recargar", None)
@@ -215,52 +281,50 @@ class RoverProblem(SearchProblem):
             restantes
         ) = state
 
-        restantes = set(restantes)
-
         tipo, parametro = action
 
-        # ---------------------------------------------
+        # =================================================
         # MOVERSE
-        # ---------------------------------------------
+        # =================================================
 
         if tipo == "moverse":
 
             posicion = parametro
             bateria -= 1
 
-        # ---------------------------------------------
+        # =================================================
         # SOBREMARCHA
-        # ---------------------------------------------
+        # =================================================
 
         elif tipo == "sobremarcha":
 
             posicion = parametro
             bateria -= 4
 
-        # ---------------------------------------------
+        # =================================================
         # EQUIPAR
-        # ---------------------------------------------
+        # =================================================
 
         elif tipo == "equipar":
 
             taladro = parametro
             bateria -= 1
 
-        # ---------------------------------------------
+        # =================================================
         # RECOLECTAR
-        # ---------------------------------------------
+        # =================================================
 
         elif tipo == "recolectar":
 
-            restantes.remove(posicion)
+            restantes = restantes - {posicion}
 
             carga += 1
 
             bateria -= 3
 
-        # ---------------------------------------------
+        # =================================================
         # DEPOSITAR
-        # ---------------------------------------------
+        # =================================================
 
         elif tipo == "depositar":
 
@@ -268,9 +332,9 @@ class RoverProblem(SearchProblem):
 
             bateria -= 1
 
-        # ---------------------------------------------
+        # =================================================
         # RECARGAR
-        # ---------------------------------------------
+        # =================================================
 
         elif tipo == "recargar":
 
@@ -328,7 +392,7 @@ class RoverProblem(SearchProblem):
         return len(restantes) == 0 and carga == 0
 
     # =================================================
-    # HEURÍSTICA
+    # HEURISTICA
     # =================================================
 
     def heuristic(self, state):
@@ -357,7 +421,7 @@ class RoverProblem(SearchProblem):
 
 
 # =====================================================
-# FUNCIÓN PRINCIPAL
+# FUNCION PRINCIPAL
 # =====================================================
 
 def planear_rover(
