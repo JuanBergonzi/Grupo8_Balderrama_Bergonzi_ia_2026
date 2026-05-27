@@ -13,15 +13,18 @@ class RoverProblem(SearchProblem):
     ):
 
         # =================================================
-        # ZONAS DE SOMBRA
+        # GUARDAMOS LAS ZONAS DE SOMBRA
         # =================================================
-
+        # Se usan para impedir acciones de recarga
+        # en esas coordenadas.
+        # Las convertimos a set para búsquedas rápidas.
         self.zonas_sombra = set(zonas_sombra)
 
         # =================================================
-        # MUESTRAS
+        # DICCIONARIO DE MUESTRAS
         # =================================================
-
+        # Asociamos cada coordenada con su tipo:
+        # "ignea" o "sedimentaria"
         self.muestras = {}
 
         for m in muestras_igneas:
@@ -33,7 +36,8 @@ class RoverProblem(SearchProblem):
         # =================================================
         # LIMITES DEL MAPA
         # =================================================
-
+        # Calculamos un rectángulo de búsqueda para
+        # evitar que el rover explore infinitamente.
         todos = (
             [rover_inicio]
             + list(zonas_sombra)
@@ -44,11 +48,9 @@ class RoverProblem(SearchProblem):
         filas = [f for f, c in todos]
         columnas = [c for f, c in todos]
 
-        # =================================================
-        # MAPA REDUCIDO
-        # =================================================
-
-        margen = 1
+        # Margen extra para permitir maniobras
+        # y rodeos necesarios.
+        margen = 3
 
         self.min_f = min(filas) - margen
         self.max_f = max(filas) + margen
@@ -59,11 +61,19 @@ class RoverProblem(SearchProblem):
         # =================================================
         # ESTADO INICIAL
         # =================================================
-
+        #
+        # estado = (
+        #   posicion,
+        #   bateria,
+        #   taladro_actual,
+        #   carga_actual,
+        #   muestras_restantes
+        # )
+        #
         estado_inicial = (
             rover_inicio,
             bateria_inicial,
-            None,
+            "ninguno",
             0,
             frozenset(self.muestras.keys())
         )
@@ -71,7 +81,7 @@ class RoverProblem(SearchProblem):
         super().__init__(estado_inicial)
 
     # =================================================
-    # ACCIONES
+    # ACCIONES POSIBLES
     # =================================================
 
     def actions(self, state):
@@ -88,6 +98,8 @@ class RoverProblem(SearchProblem):
 
         fila, col = posicion
 
+        # Movimientos posibles:
+        # arriba, abajo, izquierda y derecha
         direcciones = [
             (-1, 0),
             (1, 0),
@@ -96,67 +108,201 @@ class RoverProblem(SearchProblem):
         ]
 
         # =================================================
-        # MOVIMIENTO NORMAL
+        # RECARGAR
         # =================================================
+        #
+        # El rover recarga cuando la batería
+        # está cerca del mínimo necesario.
+        #
+        # Esto evita:
+        # - quedarse sin batería
+        # - recargar demasiado seguido
+        #
 
-        for df, dc in direcciones:
+        energia_minima = 999
 
-            nf = fila + df
-            nc = col + dc
+        if restantes:
 
-            dentro_limites = (
-                self.min_f <= nf <= self.max_f
-                and
-                self.min_c <= nc <= self.max_c
+            distancias = []
+
+            for r, c in restantes:
+
+                d = abs(fila - r) + abs(col - c)
+                distancias.append(d)
+
+            cercana = min(distancias)
+
+            # Dejamos un margen extra de energía
+            energia_minima = cercana + 4
+
+        if (
+            posicion not in self.zonas_sombra
+            and bateria <= energia_minima
+        ):
+
+            acciones.append(
+                ("recargar", None)
             )
 
-            if bateria > 1 and dentro_limites:
+        # =================================================
+        # RECOLECTAR MUESTRAS
+        # =================================================
+        #
+        # Solo se puede recolectar si:
+        # - estamos sobre una muestra
+        # - hay espacio en la carga
+        # - hay batería suficiente
+        # - el taladro correcto está equipado
+        #
 
-                if restantes:
+        if (
+            posicion in restantes
+            and carga < 2
+            and bateria > 3
+        ):
 
-                    dist_actual = min(
-                        abs(fila - rf) + abs(col - rc)
-                        for rf, rc in restantes
-                    )
+            tipo = self.muestras[posicion]
 
-                    nueva_dist = min(
-                        abs(nf - rf) + abs(nc - rc)
-                        for rf, rc in restantes
-                    )
+            # Muestra ígnea → taladro térmico
+            if (
+                tipo == "ignea"
+                and taladro == "termico"
+            ):
 
-                    # =====================================
-                    # SI SOBREMARCHA HACE LO MISMO O MEJOR,
-                    # NO CAMINAR
-                    # =====================================
+                acciones.append(
+                    ("recolectar", "ignea")
+                )
 
-                    sf = fila + 2 * df
-                    sc = col + 2 * dc
+            # Muestra sedimentaria → taladro percusión
+            elif (
+                tipo == "sedimentaria"
+                and taladro == "percusion"
+            ):
 
-                    sobremarcha_valida = (
-                        bateria > 4
-                        and
-                        self.min_f <= sf <= self.max_f
-                        and
-                        self.min_c <= sc <= self.max_c
-                    )
+                acciones.append(
+                    ("recolectar", "sedimentaria")
+                )
 
-                    if sobremarcha_valida:
+        # =================================================
+        # EQUIPAR TALADRO
+        # =================================================
+        #
+        # Solo equipamos el taladro necesario
+        # si estamos sobre una muestra y aún
+        # no tenemos el correcto.
+        #
+        # Esto evita cambios innecesarios.
+        #
 
-                        dist_sobremarcha = min(
-                            abs(sf - rf) + abs(sc - rc)
-                            for rf, rc in restantes
-                        )
+        if posicion in restantes and bateria > 1:
 
-                        if dist_sobremarcha <= nueva_dist:
-                            continue
+            tipo = self.muestras[posicion]
 
-                    if nueva_dist <= dist_actual:
+            if (
+                tipo == "ignea"
+                and taladro != "termico"
+            ):
 
-                        acciones.append(
-                            ("moverse", (nf, nc))
-                        )
+                acciones.append(
+                    ("equipar", "termico")
+                )
 
-                else:
+            elif (
+                tipo == "sedimentaria"
+                and taladro != "percusion"
+            ):
+
+                acciones.append(
+                    ("equipar", "percusion")
+                )
+
+        # =================================================
+        # DEPOSITAR CARGA
+        # =================================================
+        #
+        # Se puede depositar:
+        # - cuando la carga está llena (2)
+        # - o cuando ya no quedan muestras
+        #
+
+        if carga > 0 and bateria > 1:
+
+            # Última muestra restante
+            if len(restantes) == 0:
+
+                acciones.append(
+                    ("depositar", None)
+                )
+
+            # Cápsula completa
+            elif carga == 2:
+
+                acciones.append(
+                    ("depositar", None)
+                )
+
+        # =================================================
+        # MOVIMIENTO NORMAL
+        # =================================================
+        #
+        # Movimiento de 1 casilla.
+        #
+        # Se aplica una poda suave:
+        # el rover puede alejarse un poco,
+        # pero no demasiado.
+        #
+        # Esto mejora muchísimo el tiempo
+        # de búsqueda sin romper casos
+        # complejos.
+        #
+
+        if restantes:
+
+            distancia_actual = min(
+                abs(fila - rf) + abs(col - rc)
+                for rf, rc in restantes
+            )
+
+            for df, dc in direcciones:
+
+                nf = fila + df
+                nc = col + dc
+
+                # Verificamos que el movimiento
+                # permanezca dentro del mapa.
+                dentro_limites = (
+                    self.min_f <= nf <= self.max_f
+                    and
+                    self.min_c <= nc <= self.max_c
+                )
+
+                if not dentro_limites:
+                    continue
+
+                # Nunca dejamos batería en 0
+                if bateria <= 1:
+                    continue
+
+                nueva_distancia = min(
+                    abs(nf - rf) + abs(nc - rc)
+                    for rf, rc in restantes
+                )
+
+                # =================================================
+                # PODA SUAVE
+                # =================================================
+                #
+                # Permitimos alejarse un máximo
+                # de 2 casillas respecto a la
+                # mejor distancia actual.
+                #
+                # Esto:
+                # - mantiene rutas válidas
+                # - evita explosión de estados
+                # - acelera muchísimo A*
+                #
+
+                if nueva_distancia <= distancia_actual + 2:
 
                     acciones.append(
                         ("moverse", (nf, nc))
@@ -165,110 +311,37 @@ class RoverProblem(SearchProblem):
         # =================================================
         # SOBREMARCHA
         # =================================================
+        #
+        # Movimiento de 2 casillas rectas.
+        #
+        # Consume mucha batería pero cuesta
+        # solamente 1 minuto.
+        #
 
-        for df, dc in direcciones:
+        if bateria > 4:
 
-            nf = fila + 2 * df
-            nc = col + 2 * dc
+            for df, dc in direcciones:
 
-            dentro_limites = (
-                self.min_f <= nf <= self.max_f
-                and
-                self.min_c <= nc <= self.max_c
-            )
+                nf = fila + 2 * df
+                nc = col + 2 * dc
 
-            if bateria > 4 and dentro_limites:
-
-                if restantes:
-
-                    dist_actual = min(
-                        abs(fila - rf) + abs(col - rc)
-                        for rf, rc in restantes
-                    )
-
-                    nueva_dist = min(
-                        abs(nf - rf) + abs(nc - rc)
-                        for rf, rc in restantes
-                    )
-
-                    if nueva_dist <= dist_actual:
-
-                        acciones.append(
-                            ("sobremarcha", (nf, nc))
-                        )
-
-                else:
-
-                    acciones.append(
-                        ("sobremarcha", (nf, nc))
-                    )
-
-        # =================================================
-        # EQUIPAR TALADRO
-        # =================================================
-
-        if taladro != "termico" and bateria > 1:
-
-            acciones.append(
-                ("equipar", "termico")
-            )
-
-        if taladro != "percusion" and bateria > 1:
-
-            acciones.append(
-                ("equipar", "percusion")
-            )
-
-        # =================================================
-        # RECOLECTAR
-        # =================================================
-
-        if posicion in restantes and carga < 2 and bateria > 3:
-
-            tipo = self.muestras[posicion]
-
-            if (
-                (tipo == "ignea" and taladro == "termico")
-                or
-                (tipo == "sedimentaria" and taladro == "percusion")
-            ):
-
-                acciones.append(
-                    ("recolectar", tipo)
+                dentro_limites = (
+                    self.min_f <= nf <= self.max_f
+                    and
+                    self.min_c <= nc <= self.max_c
                 )
 
-        # =================================================
-        # DEPOSITAR
-        # =================================================
-
-        if carga > 0 and bateria > 1:
-
-            total_restantes = len(restantes)
-
-            if carga == 2 or total_restantes == 0:
+                if not dentro_limites:
+                    continue
 
                 acciones.append(
-                    ("depositar", None)
+                    ("sobremarcha", (nf, nc))
                 )
-
-        # =================================================
-        # RECARGAR
-        # =================================================
-
-        if (
-            posicion not in self.zonas_sombra
-            and
-            bateria <= 5
-        ):
-
-            acciones.append(
-                ("recargar", None)
-            )
 
         return acciones
 
     # =================================================
-    # RESULTADO
+    # RESULTADO DE UNA ACCION
     # =================================================
 
     def result(self, state, action):
@@ -283,59 +356,43 @@ class RoverProblem(SearchProblem):
 
         tipo, parametro = action
 
-        # =================================================
-        # MOVERSE
-        # =================================================
+        restantes = set(restantes)
 
+        # Movimiento normal
         if tipo == "moverse":
 
             posicion = parametro
             bateria -= 1
 
-        # =================================================
-        # SOBREMARCHA
-        # =================================================
-
+        # Sobremarcha
         elif tipo == "sobremarcha":
 
             posicion = parametro
             bateria -= 4
 
-        # =================================================
-        # EQUIPAR
-        # =================================================
-
+        # Cambio de taladro
         elif tipo == "equipar":
 
             taladro = parametro
             bateria -= 1
 
-        # =================================================
-        # RECOLECTAR
-        # =================================================
-
+        # Recolección de muestra
         elif tipo == "recolectar":
 
-            restantes = restantes - {posicion}
+            restantes.remove(posicion)
 
             carga += 1
 
             bateria -= 3
 
-        # =================================================
-        # DEPOSITAR
-        # =================================================
-
+        # Depositar cápsula
         elif tipo == "depositar":
 
             carga = 0
 
             bateria -= 1
 
-        # =================================================
-        # RECARGAR
-        # =================================================
-
+        # Recargar batería
         elif tipo == "recargar":
 
             bateria = min(20, bateria + 10)
@@ -349,7 +406,7 @@ class RoverProblem(SearchProblem):
         )
 
     # =================================================
-    # COSTO
+    # COSTO DE CADA ACCION
     # =================================================
 
     def cost(self, state, action, state2):
@@ -368,6 +425,8 @@ class RoverProblem(SearchProblem):
         if tipo == "recolectar":
             return 2
 
+        # Depositar cuesta según cantidad
+        # de muestras cargadas
         if tipo == "depositar":
 
             carga = state[3]
@@ -380,8 +439,13 @@ class RoverProblem(SearchProblem):
         return 1
 
     # =================================================
-    # META
+    # ESTADO META
     # =================================================
+    #
+    # La misión termina cuando:
+    # - no quedan muestras
+    # - la carga está vacía
+    #
 
     def is_goal(self, state):
 
@@ -389,35 +453,42 @@ class RoverProblem(SearchProblem):
 
         carga = state[3]
 
-        return len(restantes) == 0 and carga == 0
+        return (
+            len(restantes) == 0
+            and carga == 0
+        )
 
     # =================================================
     # HEURISTICA
     # =================================================
+    #
+    # Estimación optimista:
+    # distancia Manhattan mínima
+    # dividida por 3.
+    #
+    # Ayuda a A* a priorizar estados
+    # cercanos a muestras.
+    #
 
     def heuristic(self, state):
 
-        posicion = state[0]
+        posicion, bateria, taladro, carga, restantes = state
 
-        restantes = state[4]
-
-        carga = state[3]
-
+        # Si no quedan muestras,
+        # solo falta depositar.
         if not restantes:
-
             return carga
-
-        fila, col = posicion
 
         distancias = []
 
-        for rf, rc in restantes:
+        for r in restantes:
 
-            dist = abs(fila - rf) + abs(col - rc)
+            d = abs(posicion[0] - r[0]) + abs(posicion[1] - r[1])
+            distancias.append(d)
 
-            distancias.append(dist)
+        minima = min(distancias)
 
-        return min(distancias) + (2 * len(restantes)) + carga
+        return minima // 3
 
 
 # =====================================================
@@ -432,6 +503,7 @@ def planear_rover(
     muestras_sedimentarias
 ):
 
+    # Creamos el problema de búsqueda
     problema = RoverProblem(
         rover_inicio,
         bateria_inicial,
@@ -440,10 +512,20 @@ def planear_rover(
         muestras_sedimentarias
     )
 
-    resultado = astar(problema)
+    # Ejecutamos A*
+    resultado = astar(
+        problema,
+        graph_search=True
+    )
+
+    # Si no hay solución
+    if resultado is None:
+        return []
 
     acciones = []
 
+    # Reconstruimos el camino
+    # de acciones encontrado.
     for accion, estado in resultado.path()[1:]:
 
         acciones.append(accion)
