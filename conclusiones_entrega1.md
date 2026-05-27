@@ -1,0 +1,1 @@
+Como conclusión podemos afirmar que, la solución generada por IA y la nuestra presentaron un rendimiento similar, pero desarrollar y ajustar nuestra propia implementación nos permitió comprender mejor el problema, detectar fallos y adaptar la solución para cumplir correctamente con los requisitos y tests planteados.
