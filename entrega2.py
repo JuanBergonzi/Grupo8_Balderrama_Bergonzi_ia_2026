@@ -454,4 +454,4 @@ def build_camp(
             )
         )
 
-    return resultadoh
+    return resultado
