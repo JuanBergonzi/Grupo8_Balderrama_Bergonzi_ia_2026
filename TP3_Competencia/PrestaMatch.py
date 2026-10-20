@@ -1,18 +1,21 @@
 """
-PrestaMatch - Optimización de cartera P2P
-=========================================
-Estrategia: regla de puntaje. Se aprueba primero a quienes tengan
-MÁS ingreso, MÁS interés potencial y MENOS días de atraso, hasta agotar el presupuesto.
+PrestaMatch - Árbol de Decisión y optimización de cartera.
 
-Pipeline de principio a fin:
-  1) Carga de datos y cruce solicitudes <-> comportamiento bancario (sin leakage temporal)
-  2) Variables derivadas -> train_clean.csv / test_clean.csv
-  3) Evaluación: baseline, hold-out estratificado y K-Fold estratificado
-  4) Decisión sobre test dentro del presupuesto -> salida/submission.csv
+Entradas (en DATA_DIR, por defecto ./data):
+    train_clean.csv  -> datos de entrenamiento, debe incluir Estado_Final
+    test_clean.csv   -> solicitudes nuevas, sin Estado_Final
 
-Uso:
-    DATA_DIR=data OUT_DIR=salida python solucion.py
-    (DATA_DIR = carpeta con los 3 CSV; por defecto "data". OUT_DIR por defecto "salida")
+Salida (en OUT_DIR, por defecto ./salida):
+    solicitudes_test.csv -> archivo final con exactamente:
+                            ID_Solicitud, Decision_Aprobacion
+    resultados.json       -> métricas de evaluación y resumen de decisiones
+
+Ejecución:
+    pip install pandas numpy scikit-learn scipy
+    python solucion.py
+
+Si los CSV están en otra carpeta:
+    DATA_DIR=. OUT_DIR=salida python solucion.py
 """
 import json
 import os
@@ -20,174 +23,299 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
 from sklearn.model_selection import StratifiedKFold, train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.tree import DecisionTreeClassifier
 
 SEED = 42
-np.random.seed(SEED)
-
+PRESUPUESTO = 2_000_000
+# Pesos explícitos de la consigna: las tres reglas tienen igual importancia.
+PESOS_REGLA = {"ingreso": 1, "interes": 1, "atraso": 1}
 DATA_DIR = Path(os.environ.get("DATA_DIR", "data"))
 OUT_DIR = Path(os.environ.get("OUT_DIR", "salida"))
-PRESUPUESTO = 2_000_000
-VENTANA = 12          # meses previos a la solicitud que se usan del banco
-
-# Peso de cada criterio en el puntaje (mayor peso = pesa más en el orden)
-PESOS_REGLA = {"ingreso": 1, "interes": 1, "atraso": 1}
 
 
-# ======================================================================
-# 1) CARGA Y VARIABLES
-# ======================================================================
 def cargar_datos():
-    tr = pd.read_csv(DATA_DIR / "solicitudes_train.csv")
-    te = pd.read_csv(DATA_DIR / "solicitudes_test.csv")
-    cb = pd.read_csv(DATA_DIR / "comportamiento_bancario.csv")
-    return tr, te, cb
+    train_path = DATA_DIR / "train_clean.csv"
+    test_path = DATA_DIR / "test_clean.csv"
+    if not train_path.exists() or not test_path.exists():
+        raise FileNotFoundError(
+            f"No encuentro {train_path} y/o {test_path}. "
+            "Poné train_clean.csv y test_clean.csv en la carpeta indicada por DATA_DIR."
+        )
+
+    train = pd.read_csv(train_path)
+    test = pd.read_csv(test_path)
+
+    if "Estado_Final" not in train.columns:
+        raise ValueError("train_clean.csv debe contener la columna Estado_Final.")
+    if "Estado_Final" in test.columns:
+        raise ValueError("test_clean.csv no debe contener Estado_Final.")
+    for nombre, df in [("train_clean.csv", train), ("test_clean.csv", test)]:
+        if "ID_Solicitud" not in df.columns:
+            raise ValueError(f"{nombre} debe contener ID_Solicitud.")
+        if df["ID_Solicitud"].duplicated().any():
+            raise ValueError(f"{nombre} contiene ID_Solicitud duplicados.")
+
+    return train, test
 
 
-def _mes_idx(s):
-    """'2025-04' -> número entero de mes (para restar fechas)."""
-    p = s.str.split("-", expand=True).astype(int)
-    return p[0] * 12 + p[1]
+def crear_modelo(X):
+    categoricas = X.select_dtypes(include=["object", "category", "bool"]).columns.tolist()
+    numericas = [c for c in X.columns if c not in categoricas]
+
+    preprocesador = ColumnTransformer(
+        transformers=[
+            ("num", SimpleImputer(strategy="median"), numericas),
+            ("cat", Pipeline(steps=[
+                ("imputer", SimpleImputer(strategy="most_frequent")),
+                ("onehot", OneHotEncoder(handle_unknown="ignore")),
+            ]), categoricas),
+        ],
+        remainder="drop",
+    )
+    return Pipeline(steps=[
+        ("preprocesamiento", preprocesador),
+        ("arbol", DecisionTreeClassifier(
+            max_depth=6,
+            min_samples_leaf=20,
+            class_weight="balanced",
+            random_state=SEED,
+        )),
+    ])
 
 
-def _agregar_banco(sol, cb):
-    """Resume el comportamiento bancario de cada solicitud usando SOLO los
-    VENTANA meses anteriores a la fecha de solicitud (evita leakage)."""
-    m = sol[["ID_Solicitud", "ID_Usuario", "sol_idx"]].merge(cb, on="ID_Usuario")
-    m["meses_antes"] = m["sol_idx"] - m["mes_idx"]       # 1 = mes inmediato anterior
-    m = m[(m["meses_antes"] >= 1) & (m["meses_antes"] <= VENTANA)]
-    g = m.groupby("ID_Solicitud")
-    return pd.DataFrame({
-        "n_meses_hist": g.size(),
-        "saldo_medio": g["Saldo_Promedio_Mensual"].mean(),
-        "atraso_medio": g["Dias_Atraso_Otras_Deudas"].mean(),
-    }).reset_index()
+def preparar_xy(train, test):
+    columnas_no_predictoras = ["ID_Solicitud", "ID_Usuario", "Estado_Final"]
+    X_train = train.drop(columns=columnas_no_predictoras, errors="ignore")
+    y = train["Estado_Final"].astype(int)
+    X_test = test.drop(
+        columns=["ID_Solicitud", "ID_Usuario", "Estado_Final"], errors="ignore"
+    )
+
+    # Mantener exactamente las columnas y el orden que aprendió el entrenamiento.
+    faltantes = [c for c in X_train.columns if c not in X_test.columns]
+    extras = [c for c in X_test.columns if c not in X_train.columns]
+    if faltantes or extras:
+        raise ValueError(
+            f"Las variables de train y test no coinciden. "
+            f"Faltan en test: {faltantes}; sobran en test: {extras}."
+        )
+    X_test = X_test[X_train.columns]
+    return X_train, y, X_test
 
 
-def construir_features(sol, cb):
-    sol = sol.copy()
-    sol["sol_idx"] = _mes_idx(sol["Fecha_Solicitud"])
-    d = sol.merge(_agregar_banco(sol, cb), on="ID_Solicitud", how="left")
-    d["monto_sobre_ingreso"] = d["Monto_Solicitado"] / d["Ingreso_Mensual"]       # cuántos sueldos pide
-    d["puede_pagar"] = (d["saldo_medio"] >= d["Monto_Solicitado"]).astype(int)    # 1 = su saldo cubre el monto
-    d["interes_potencial"] = d["Monto_Solicitado"] * d["Tasa_Interes"]            # lo que gana la plataforma si paga
-    return d.drop(columns=["Motivo_Prestamo", "Fecha_Solicitud", "sol_idx"])
+def ganancia_esperada(prob_pago, monto, tasa):
+    # Si paga: se gana Monto*Tasa; si cae en default: se pierde Monto.
+    return monto * (prob_pago * (1.0 + tasa) - 1.0)
 
 
-def preparar(tr, te, cb):
-    """Devuelve (tr_clean, te_clean, lista_de_features)."""
-    tr_c, te_c = construir_features(tr, cb), construir_features(te, cb)
-    feats = [c for c in te_c.columns if c not in ("ID_Solicitud", "ID_Usuario")]
-    med = tr_c[feats].median()                    # medianas SOLO de train
-    tr_c[feats] = tr_c[feats].fillna(med)
-    te_c[feats] = te_c[feats].fillna(med)
-    return tr_c, te_c, feats
+def calcular_puntaje_reglas(df):
+    """Puntaje 0..1 por percentiles: más ingreso/interés y menos atraso es mejor."""
+    requeridas = {
+        "ingreso": "Ingreso_Mensual",
+        "interes": "interes_potencial",
+        "atraso": "atraso_medio",
+    }
+    faltan = [col for col in requeridas.values() if col not in df.columns]
+    if faltan:
+        raise ValueError(f"Faltan columnas para aplicar PESOS_REGLA: {faltan}")
+
+    ingreso = pd.to_numeric(df[requeridas["ingreso"]], errors="coerce")
+    interes = pd.to_numeric(df[requeridas["interes"]], errors="coerce")
+    atraso = pd.to_numeric(df[requeridas["atraso"]], errors="coerce")
+
+    # Percentiles en [0,1]. Para atraso se invierte: menos días = mejor puntaje.
+    percentiles = {
+        "ingreso": ingreso.rank(pct=True).fillna(0.0).to_numpy(),
+        "interes": interes.rank(pct=True).fillna(0.0).to_numpy(),
+        "atraso": (1.0 - atraso.rank(pct=True)).fillna(0.0).to_numpy(),
+    }
+    suma_pesos = sum(PESOS_REGLA.values())
+    if suma_pesos <= 0:
+        raise ValueError("La suma de PESOS_REGLA debe ser mayor que cero.")
+    puntaje = sum(PESOS_REGLA[k] * percentiles[k] for k in PESOS_REGLA) / suma_pesos
+    return np.asarray(puntaje, dtype=float)
 
 
-# ======================================================================
-# 2) REGLA DE DECISIÓN Y MÉTRICA DE NEGOCIO
-# ======================================================================
-def puntaje_regla(d, pesos=None):
-    """Puntaje 0-1 por solicitud: promedio ponderado de tres percentiles (dentro de d):
-       - Ingreso_Mensual   (más ingreso  -> mejor)
-       - interes_potencial (más interés  -> mejor)
-       - atraso_medio      (menos atraso -> mejor, por eso se invierte el signo)
-    Los percentiles ponen las tres variables en la misma escala (miles de USD vs días)."""
-    pesos = pesos or PESOS_REGLA
-    pct = lambda v: pd.Series(v).rank(pct=True).values
-    total = sum(pesos.values())
-    return (pesos["ingreso"] * pct(d["Ingreso_Mensual"].values)
-            + pesos["interes"] * pct(d["interes_potencial"].values)
-            + pesos["atraso"] * pct(-d["atraso_medio"].values)) / total
+def seleccionar_cartera(ganancia, monto, presupuesto, puntaje_reglas):
+    """Selecciona préstamos rentables por puntaje ponderado sin exceder el presupuesto.
 
+    Primero descarta ganancias esperadas no positivas. Después prioriza el puntaje
+    explícito de las reglas (pesos ingreso/interés/atraso) por dólar solicitado.
+    La ganancia realizada/esperada se sigue reportando como métrica, pero esta
+    selección no garantiza maximizarla; prioriza cumplir las reglas ponderadas.
+    """
+    ganancia = np.asarray(ganancia, dtype=float)
+    monto = np.asarray(monto, dtype=float)
+    puntaje_reglas = np.asarray(puntaje_reglas, dtype=float)
+    aprobado = np.zeros(len(monto), dtype=int)
+    elegibles = np.where(
+        (monto > 0) & np.isfinite(ganancia) & (ganancia > 0)
+        & np.isfinite(puntaje_reglas)
+    )[0]
+    if len(elegibles) == 0 or presupuesto <= 0:
+        return aprobado
 
-def aprobar_por_puntaje(puntaje, monto, presupuesto):
-    """Aprueba en orden de mayor puntaje mientras el acumulado entre en el presupuesto."""
-    aprobado = np.zeros(len(puntaje), dtype=int)
-    gastado = 0
-    for i in np.argsort(-puntaje, kind="stable"):
+    # Mochila 0/1: maximiza el puntaje ponderado de reglas con el presupuesto.
+    try:
+        from scipy.optimize import Bounds, LinearConstraint, milp
+        resultado = milp(
+            c=-puntaje_reglas[elegibles],
+            integrality=np.ones(len(elegibles)),
+            bounds=Bounds(np.zeros(len(elegibles)), np.ones(len(elegibles))),
+            constraints=LinearConstraint(
+                monto[elegibles].reshape(1, -1), -np.inf, presupuesto
+            ),
+            options={"time_limit": 60},
+        )
+        if resultado.x is not None and resultado.success:
+            aprobado[elegibles] = (resultado.x >= 0.5).astype(int)
+            return aprobado
+    except Exception:
+        pass
+
+    # Alternativa si el optimizador no está disponible: puntaje por dólar.
+    orden = elegibles[np.argsort(-(puntaje_reglas[elegibles] / monto[elegibles]))]
+    gastado = 0.0
+    for i in orden:
         if gastado + monto[i] <= presupuesto:
             aprobado[i] = 1
             gastado += monto[i]
     return aprobado
 
 
-def roi_por_puntaje(d, puntaje, frac_presup):
-    """ROI real = ganancia neta / presupuesto simulado.
-    Paga -> Monto x Tasa ; default -> -Monto ; rechazado -> 0."""
-    monto, tasa = d["Monto_Solicitado"].values, d["Tasa_Interes"].values
-    presup = frac_presup * monto.sum()
-    ap = aprobar_por_puntaje(puntaje, monto, presup)
-    g = np.where(d["Estado_Final"].values == 1, monto * tasa, -monto)
-    return (g * ap).sum() / presup
+def ganancia_real(y_real, monto, tasa, aprobado):
+    ganancia_por_solicitud = np.where(
+        np.asarray(y_real) == 1,
+        np.asarray(monto) * np.asarray(tasa),
+        -np.asarray(monto),
+    )
+    return float((ganancia_por_solicitud * np.asarray(aprobado)).sum())
 
 
-def cv_roi(tr_c, y, frac_presup, fn_puntaje):
-    """ROI promedio y desvío con K-Fold estratificado (5 folds).
-    fn_puntaje(d) devuelve el puntaje de cada fila de d."""
-    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=SEED)
-    r = [roi_por_puntaje(tr_c.iloc[b], fn_puntaje(tr_c.iloc[b]), frac_presup)
-         for _, b in skf.split(tr_c, y)]
-    return float(np.mean(r)), float(np.std(r))
+def evaluar(modelo, X, y, df, presupuesto):
+    clases = list(modelo.named_steps["arbol"].classes_)
+    prob = modelo.predict_proba(X)[:, clases.index(1)]
+    monto = df["Monto_Solicitado"].to_numpy(dtype=float)
+    tasa = df["Tasa_Interes"].to_numpy(dtype=float)
+    puntaje_reglas = calcular_puntaje_reglas(df)
+    aprobado = seleccionar_cartera(
+        ganancia_esperada(prob, monto, tasa), monto, presupuesto, puntaje_reglas
+    )
+    gastado = float((monto * aprobado).sum())
+    return {
+        "ganancia_neta": ganancia_real(y, monto, tasa, aprobado),
+        "roi_sobre_capital_prestado": (
+            ganancia_real(y, monto, tasa, aprobado) / gastado if gastado > 0 else 0.0
+        ),
+        "aprobadas": int(aprobado.sum()),
+        "monto_aprobado": gastado,
+    }
 
 
-def puntaje_baseline_tasa(d):
-    """Baseline sin criterio de riesgo: prestar primero a quien paga más tasa."""
-    return d["Tasa_Interes"].values
-
-
-# ======================================================================
-# 3) PROGRAMA PRINCIPAL
-# ======================================================================
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    tr, te, cb = cargar_datos()
-    cb["mes_idx"] = _mes_idx(cb["Mes_Referencia"])
-    tr_c, te_c, FEATS = preparar(tr, te, cb)
-    tr_c.to_csv(OUT_DIR / "train_clean.csv", index=False)
-    te_c.to_csv(OUT_DIR / "test_clean.csv", index=False)
-    y = tr_c["Estado_Final"]
-    frac = PRESUPUESTO / te_c["Monto_Solicitado"].sum()   # presupuesto relativo en test (~29%)
-    print(f"train {tr_c.shape} | test {te_c.shape} | {len(FEATS)} variables")
+    train, test = cargar_datos()
+    X, y, X_test = preparar_xy(train, test)
 
-    res = {"n_train": len(tr_c), "n_test": len(te_c), "n_features": len(FEATS),
-           "pct_pagan": float(y.mean()), "frac_presupuesto": float(frac),
-           "pesos": PESOS_REGLA,
-           "pct_puede_pagar_train": float(tr_c["puede_pagar"].mean()),
-           "pct_puede_pagar_test": float(te_c["puede_pagar"].mean())}
+    if not set(y.unique()).issubset({0, 1}) or len(y.unique()) != 2:
+        raise ValueError("Estado_Final debe contener las dos clases 0 (default) y 1 (pagado).")
+    for col in ["Monto_Solicitado", "Tasa_Interes"]:
+        if col not in train.columns or col not in test.columns:
+            raise ValueError(f"Falta la columna requerida para calcular ganancia: {col}.")
 
-    # ---- Hold-out estratificado 70/30 ----
-    _, idx_va = train_test_split(tr_c.index, test_size=0.30, stratify=y, random_state=SEED)
-    v = tr_c.loc[idx_va]
-    res["holdout"] = {
-        "baseline_tasa": float(roi_por_puntaje(v, puntaje_baseline_tasa(v), frac)),
-        "regla": float(roi_por_puntaje(v, puntaje_regla(v), frac)),
+    # Hold-out estratificado para evaluar en filas no usadas para entrenar.
+    idx_fit, idx_val = train_test_split(
+        np.arange(len(train)), test_size=0.30, stratify=y, random_state=SEED
+    )
+    modelo_val = crear_modelo(X)
+    modelo_val.fit(X.iloc[idx_fit], y.iloc[idx_fit])
+    presupuesto_val = min(
+        PRESUPUESTO, float(train.iloc[idx_val]["Monto_Solicitado"].sum())
+    )
+    holdout = evaluar(
+        modelo_val, X.iloc[idx_val], y.iloc[idx_val],
+        train.iloc[idx_val], presupuesto_val
+    )
+
+    # Validación cruzada estratificada de 5 folds.
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=SEED)
+    folds = []
+    for idx_fit, idx_eval in skf.split(X, y):
+        modelo_fold = crear_modelo(X)
+        modelo_fold.fit(X.iloc[idx_fit], y.iloc[idx_fit])
+        presupuesto_fold = min(
+            PRESUPUESTO, float(train.iloc[idx_eval]["Monto_Solicitado"].sum())
+        )
+        folds.append(evaluar(
+            modelo_fold, X.iloc[idx_eval], y.iloc[idx_eval],
+            train.iloc[idx_eval], presupuesto_fold
+        ))
+
+    cv = {
+        "ganancia_neta_media": float(np.mean([r["ganancia_neta"] for r in folds])),
+        "roi_medio": float(np.mean([r["roi_sobre_capital_prestado"] for r in folds])),
+        "detalle_folds": folds,
     }
-    print("\n=== Hold-out (30% de validación) ===")
-    print(f"Baseline (prestar por tasa) ROI: {res['holdout']['baseline_tasa']:+.2%}")
-    print(f"Regla ingreso/interés/atraso ROI: {res['holdout']['regla']:+.2%}")
 
-    # ---- K-Fold estratificado (5 folds) ----
-    mu_b, sd_b = cv_roi(tr_c, y, frac, puntaje_baseline_tasa)
-    mu_r, sd_r = cv_roi(tr_c, y, frac, puntaje_regla)
-    res["cv"] = {"baseline_tasa": {"roi": mu_b, "std": sd_b}, "regla": {"roi": mu_r, "std": sd_r}}
-    print("\n=== K-Fold estratificado (5 folds) ===")
-    print(f"Baseline (prestar por tasa) ROI: {mu_b:+.2%} (±{sd_b:.2%})")
-    print(f"Regla {PESOS_REGLA}  ROI: {mu_r:+.2%} (±{sd_r:.2%})")
+    # Modelo final entrenado con todo train_clean.csv.
+    modelo_final = crear_modelo(X)
+    modelo_final.fit(X, y)
+    clases = list(modelo_final.named_steps["arbol"].classes_)
+    prob_test = modelo_final.predict_proba(X_test)[:, clases.index(1)]
 
-    # ---- Decisión sobre test ----
-    aprobado = aprobar_por_puntaje(puntaje_regla(te_c), te_c["Monto_Solicitado"].values, PRESUPUESTO)
-    sub = pd.DataFrame({"ID_Solicitud": te_c["ID_Solicitud"], "Aprobado": aprobado})
-    sub.to_csv(OUT_DIR / "submission.csv", index=False)
-    gastado = int(te_c.loc[aprobado == 1, "Monto_Solicitado"].sum())
-    res.update({"aprobadas": int(aprobado.sum()), "monto_aprobado": gastado})
-    print(f"\nAprobadas: {aprobado.sum()} de {len(te_c)} | Monto: {gastado:,} (límite {PRESUPUESTO:,})")
-    assert gastado <= PRESUPUESTO, "¡Te pasaste del presupuesto!"
-    assert set(sub["Aprobado"].unique()) <= {0, 1} and sub["ID_Solicitud"].is_unique
-    assert len(sub) == len(te)
+    monto_test = test["Monto_Solicitado"].to_numpy(dtype=float)
+    tasa_test = test["Tasa_Interes"].to_numpy(dtype=float)
+    ganancia_test = ganancia_esperada(prob_test, monto_test, tasa_test)
+    puntaje_reglas_test = calcular_puntaje_reglas(test)
+    aprobado = seleccionar_cartera(
+        ganancia_test, monto_test, PRESUPUESTO, puntaje_reglas_test
+    )
 
-    with open(OUT_DIR / "resultados.json", "w") as f:
-        json.dump(res, f, indent=2)
+    # Archivo final con los nombres y el orden de columnas solicitados.
+    salida = pd.DataFrame({
+        "ID_Solicitud": test["ID_Solicitud"].to_numpy(),
+        "Decision_Aprobacion": aprobado.astype(int),
+    })
+    salida.to_csv(OUT_DIR / "solicitudes_test.csv", index=False)
+
+    monto_aprobado = float((monto_test * aprobado).sum())
+    resultados = {
+        "modelo": "DecisionTreeClassifier",
+        "n_train": int(len(train)),
+        "n_test": int(len(test)),
+        "pct_pagaron_train": float(y.mean()),
+        "presupuesto_usd": PRESUPUESTO,
+        "pesos_regla": PESOS_REGLA,
+        "criterio_seleccion": "maximizar puntaje ponderado de reglas entre préstamos con ganancia esperada positiva, sujeto al presupuesto",
+        "holdout": holdout,
+        "cv_5_folds": cv,
+        "test": {
+            "aprobadas": int(aprobado.sum()),
+            "monto_aprobado": monto_aprobado,
+            "presupuesto_restante": float(PRESUPUESTO - monto_aprobado),
+            "ganancia_esperada_total": float((ganancia_test * aprobado).sum()),
+        },
+    }
+    with open(OUT_DIR / "resultados.json", "w", encoding="utf-8") as f:
+        json.dump(resultados, f, indent=2, ensure_ascii=False)
+
+    assert monto_aprobado <= PRESUPUESTO + 1e-6, "Se superó el presupuesto."
+    assert salida.columns.tolist() == ["ID_Solicitud", "Decision_Aprobacion"]
+    assert salida["ID_Solicitud"].is_unique
+
+    print(f"Árbol de Decisión | train: {len(train)} | test: {len(test)}")
+    print(f"Hold-out: ganancia neta ${holdout['ganancia_neta']:,.2f} | "
+          f"ROI: {holdout['roi_sobre_capital_prestado']:.2%}")
+    print(f"CV: ganancia neta media ${cv['ganancia_neta_media']:,.2f} | "
+          f"ROI medio: {cv['roi_medio']:.2%}")
+    print(f"Test: {aprobado.sum()} aprobadas | monto ${monto_aprobado:,.2f} "
+          f"de ${PRESUPUESTO:,.2f}")
+    print(f"Archivo final: {OUT_DIR / 'solicitudes_test.csv'}")
 
 
 if __name__ == "__main__":

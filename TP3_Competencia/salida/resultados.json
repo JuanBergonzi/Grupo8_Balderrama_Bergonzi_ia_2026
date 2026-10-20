@@ -1,0 +1,61 @@
+{
+  "modelo": "DecisionTreeClassifier",
+  "n_train": 32416,
+  "n_test": 3061,
+  "pct_pagaron_train": 0.8404800098716683,
+  "presupuesto_usd": 2000000,
+  "pesos_regla": {
+    "ingreso": 1,
+    "interes": 1,
+    "atraso": 1
+  },
+  "criterio_seleccion": "maximizar puntaje ponderado de reglas entre préstamos con ganancia esperada positiva, sujeto al presupuesto",
+  "holdout": {
+    "ganancia_neta": 422723.58999999997,
+    "roi_sobre_capital_prestado": 0.211361795,
+    "aprobadas": 598,
+    "monto_aprobado": 2000000.0
+  },
+  "cv_5_folds": {
+    "ganancia_neta_media": 421798.6479999999,
+    "roi_medio": 0.21089932400000003,
+    "detalle_folds": [
+      {
+        "ganancia_neta": 410165.83999999997,
+        "roi_sobre_capital_prestado": 0.20508291999999997,
+        "aprobadas": 525,
+        "monto_aprobado": 2000000.0
+      },
+      {
+        "ganancia_neta": 409967.59,
+        "roi_sobre_capital_prestado": 0.20498379500000002,
+        "aprobadas": 562,
+        "monto_aprobado": 2000000.0
+      },
+      {
+        "ganancia_neta": 431212.52,
+        "roi_sobre_capital_prestado": 0.21560626000000002,
+        "aprobadas": 533,
+        "monto_aprobado": 2000000.0
+      },
+      {
+        "ganancia_neta": 439453.35,
+        "roi_sobre_capital_prestado": 0.21972667499999998,
+        "aprobadas": 525,
+        "monto_aprobado": 2000000.0
+      },
+      {
+        "ganancia_neta": 418193.94000000006,
+        "roi_sobre_capital_prestado": 0.20909697000000002,
+        "aprobadas": 541,
+        "monto_aprobado": 2000000.0
+      }
+    ]
+  },
+  "test": {
+    "aprobadas": 1317,
+    "monto_aprobado": 2000000.0,
+    "presupuesto_restante": 0.0,
+    "ganancia_esperada_total": 259852.27971341024
+  }
+}
