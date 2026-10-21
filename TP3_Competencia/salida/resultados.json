@@ -1,5 +1,10 @@
 {
   "modelo": "DecisionTreeClassifier",
+  "parametros": {
+    "max_depth": 6,
+    "min_samples_leaf": 40,
+    "class_weight": null
+  },
   "n_train": 32416,
   "n_test": 3061,
   "pct_pagaron_train": 0.8404800098716683,
@@ -9,53 +14,59 @@
     "interes": 1,
     "atraso": 1
   },
-  "criterio_seleccion": "maximizar puntaje ponderado de reglas entre préstamos con ganancia esperada positiva, sujeto al presupuesto",
+  "criterio_seleccion": "maximizar ganancia esperada total; reglas ponderadas 1:1:1 como desempate marginal",
   "holdout": {
-    "ganancia_neta": 422723.58999999997,
-    "roi_sobre_capital_prestado": 0.211361795,
-    "aprobadas": 598,
-    "monto_aprobado": 2000000.0
+    "ganancia_neta": 433660.68999999994,
+    "roi_sobre_capital_prestado": 0.21683034499999998,
+    "aprobadas": 37,
+    "monto_aprobado": 2000000.0,
+    "ganancia_esperada": 647484.9610874583
   },
   "cv_5_folds": {
-    "ganancia_neta_media": 421798.6479999999,
-    "roi_medio": 0.21089932400000003,
+    "ganancia_neta_media": 515843.8300000001,
+    "roi_medio": 0.257921915,
     "detalle_folds": [
       {
-        "ganancia_neta": 410165.83999999997,
-        "roi_sobre_capital_prestado": 0.20508291999999997,
-        "aprobadas": 525,
-        "monto_aprobado": 2000000.0
+        "ganancia_neta": 501079.21,
+        "roi_sobre_capital_prestado": 0.250539605,
+        "aprobadas": 110,
+        "monto_aprobado": 2000000.0,
+        "ganancia_esperada": 567549.0557335278
       },
       {
-        "ganancia_neta": 409967.59,
-        "roi_sobre_capital_prestado": 0.20498379500000002,
-        "aprobadas": 562,
-        "monto_aprobado": 2000000.0
+        "ganancia_neta": 510814.88,
+        "roi_sobre_capital_prestado": 0.25540744,
+        "aprobadas": 83,
+        "monto_aprobado": 2000000.0,
+        "ganancia_esperada": 560336.3872627171
       },
       {
-        "ganancia_neta": 431212.52,
-        "roi_sobre_capital_prestado": 0.21560626000000002,
-        "aprobadas": 533,
-        "monto_aprobado": 2000000.0
+        "ganancia_neta": 528750.52,
+        "roi_sobre_capital_prestado": 0.26437526,
+        "aprobadas": 68,
+        "monto_aprobado": 2000000.0,
+        "ganancia_esperada": 589063.7648828689
       },
       {
-        "ganancia_neta": 439453.35,
-        "roi_sobre_capital_prestado": 0.21972667499999998,
-        "aprobadas": 525,
-        "monto_aprobado": 2000000.0
+        "ganancia_neta": 506210.76,
+        "roi_sobre_capital_prestado": 0.25310538,
+        "aprobadas": 60,
+        "monto_aprobado": 2000000.0,
+        "ganancia_esperada": 600976.2927196411
       },
       {
-        "ganancia_neta": 418193.94000000006,
-        "roi_sobre_capital_prestado": 0.20909697000000002,
-        "aprobadas": 541,
-        "monto_aprobado": 2000000.0
+        "ganancia_neta": 532363.78,
+        "roi_sobre_capital_prestado": 0.26618189000000003,
+        "aprobadas": 61,
+        "monto_aprobado": 2000000.0,
+        "ganancia_esperada": 587825.6921286085
       }
     ]
   },
   "test": {
-    "aprobadas": 1317,
+    "aprobadas": 608,
     "monto_aprobado": 2000000.0,
     "presupuesto_restante": 0.0,
-    "ganancia_esperada_total": 259852.27971341024
+    "ganancia_esperada_total": 510231.03115367016
   }
 }
