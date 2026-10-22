@@ -16,6 +16,9 @@ from sklearn.ensemble import RandomForestClassifier
 SEED = 42
 PRESUPUESTO = 2_000_000
 PESOS_REGLA = {"ingreso": 1, "interes": 1, "atraso": 1}
+N_ESTIMATORS = 200
+MAX_DEPTH = 8
+MIN_SAMPLES_LEAF = 40
 DATA_DIR = Path(os.environ.get("DATA_DIR", "data"))
 OUT_DIR = Path(os.environ.get("OUT_DIR", "salida"))
 
@@ -41,9 +44,9 @@ def crear_modelo(X):
     return Pipeline([
         ("preprocesamiento", prep),
         ("arbol", RandomForestClassifier(
-            n_estimators=200,
-            max_depth=16,
-            min_samples_leaf=60,
+            n_estimators=N_ESTIMATORS,
+            max_depth=MAX_DEPTH,
+            min_samples_leaf=MIN_SAMPLES_LEAF,
             max_features="sqrt",
             class_weight=None,
             random_state=SEED,
@@ -172,7 +175,7 @@ def main():
     salida = pd.DataFrame({"ID_Solicitud": test.ID_Solicitud.to_numpy(), "Decision_Aprobacion": aprobado})
     salida.to_csv(OUT_DIR / "solicitudes_test.csv", index=False)
     gastado = float((monto*aprobado).sum())
-    resultados = {"modelo":"RandomForestClassifier", "parametros":{"n_estimators": 200,"max_depth":16,"min_samples_leaf":60,"max_features": "sqrt","class_weight":None,"random_state": SEED},
+    resultados = {"modelo":"RandomForestClassifier", "parametros":{"n_estimators": N_ESTIMATORS,"max_depth":MAX_DEPTH,"min_samples_leaf":MIN_SAMPLES_LEAF,"max_features": "sqrt","class_weight":None,"random_state": SEED},
       "n_train":len(train),"n_test":len(test),"pct_pagaron_train":float(y.mean()),"presupuesto_usd":PRESUPUESTO,
       "pesos_regla":PESOS_REGLA,
       "criterio_seleccion":"maximizar ganancia esperada total; reglas ponderadas 1:1:1 como desempate marginal",
