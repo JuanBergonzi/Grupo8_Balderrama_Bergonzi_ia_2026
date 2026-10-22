@@ -11,7 +11,7 @@ from sklearn.impute import SimpleImputer
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
-from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier
 
 SEED = 42
 PRESUPUESTO = 2_000_000
@@ -33,16 +33,23 @@ def cargar_datos():
 
 def crear_modelo(X):
     categoricas = X.select_dtypes(include=["object", "category", "bool"]).columns.tolist()
+
     numericas = [c for c in X.columns if c not in categoricas]
-    prep = ColumnTransformer([
-        ("num", SimpleImputer(strategy="median"), numericas),
-        ("cat", Pipeline([("imputer", SimpleImputer(strategy="most_frequent")),
-                          ("onehot", OneHotEncoder(handle_unknown="ignore"))]), categoricas),
-    ], remainder="drop")
-    # Configuración elegida por comparación de validación cruzada de rentabilidad.
-    return Pipeline([("preprocesamiento", prep),
-                     ("arbol", DecisionTreeClassifier(max_depth=6, min_samples_leaf=40,
-                                                       class_weight=None, random_state=SEED))])
+
+    prep = ColumnTransformer([("num", SimpleImputer(strategy="median"), numericas), ("cat", Pipeline([("imputer", SimpleImputer(strategy="most_frequent")),("onehot", OneHotEncoder(handle_unknown="ignore")) ]), categoricas), ], remainder="drop")
+
+    return Pipeline([
+        ("preprocesamiento", prep),
+        ("arbol", RandomForestClassifier(
+            n_estimators=200,
+            max_depth=16,
+            min_samples_leaf=60,
+            max_features="sqrt",
+            class_weight=None,
+            random_state=SEED,
+            n_jobs=-1
+        ))
+    ])
 
 
 def preparar_xy(train, test):
@@ -97,10 +104,7 @@ def seleccionar_cartera(ganancia, monto, presupuesto, puntaje_reglas):
         # respeta los pesos como desempate sin reemplazar el objetivo financiero.
         max_score = max(float(np.max(score[elegibles])), 1.0)
         objetivo = g[elegibles] + 0.01 * score[elegibles] / max_score
-        r = milp(c=-objetivo, integrality=np.ones(len(elegibles)),
-                 bounds=Bounds(np.zeros(len(elegibles)), np.ones(len(elegibles))),
-                 constraints=LinearConstraint(m[elegibles].reshape(1, -1), -np.inf, presupuesto),
-                 options={"time_limit": 60})
+        r = milp(c=-objetivo, integrality=np.ones(len(elegibles)), bounds=Bounds(np.zeros(len(elegibles)), np.ones(len(elegibles))),constraints=LinearConstraint(m[elegibles].reshape(1, -1), -np.inf, presupuesto), options={"time_limit": 60})
         if r.x is not None and r.success:
             aprobado[elegibles] = (r.x >= .5).astype(int)
             return aprobado
@@ -154,7 +158,7 @@ def main():
         mf = crear_modelo(X); mf.fit(X.iloc[a], y.iloc[a])
         budget = min(PRESUPUESTO, float(train.iloc[b].Monto_Solicitado.sum()))
         folds.append(evaluar(mf, X.iloc[b], y.iloc[b], train.iloc[b], budget))
-    cv = {"ganancia_neta_media": float(np.mean([f["ganancia_neta"] for f in folds])),
+    cv = {"ganancia_neta_media": float(np.mean([f["ganancia_neta"] for f in folds])), 
           "roi_medio": float(np.mean([f["roi_sobre_capital_prestado"] for f in folds])),
           "detalle_folds": folds}
 
@@ -168,13 +172,14 @@ def main():
     salida = pd.DataFrame({"ID_Solicitud": test.ID_Solicitud.to_numpy(), "Decision_Aprobacion": aprobado})
     salida.to_csv(OUT_DIR / "solicitudes_test.csv", index=False)
     gastado = float((monto*aprobado).sum())
-    resultados = {"modelo":"DecisionTreeClassifier", "parametros":{"max_depth":6,"min_samples_leaf":40,"class_weight":None},
+    resultados = {"modelo":"RandomForestClassifier", "parametros":{"n_estimators": 200,"max_depth":16,"min_samples_leaf":60,"max_features": "sqrt","class_weight":None,"random_state": SEED},
       "n_train":len(train),"n_test":len(test),"pct_pagaron_train":float(y.mean()),"presupuesto_usd":PRESUPUESTO,
       "pesos_regla":PESOS_REGLA,
       "criterio_seleccion":"maximizar ganancia esperada total; reglas ponderadas 1:1:1 como desempate marginal",
       "holdout":holdout,"cv_5_folds":cv,
-      "test":{"aprobadas":int(aprobado.sum()),"monto_aprobado":gastado,"presupuesto_restante":PRESUPUESTO-gastado,
-               "ganancia_esperada_total":float((ge*aprobado).sum())}}
+      "test":{"aprobadas":int(aprobado.sum()),"monto_aprobado":gastado,"presupuesto_restante":PRESUPUESTO-gastado, 
+              "ganancia_esperada_total":float((ge*aprobado).sum())}}
+    
     with open(OUT_DIR/"resultados.json","w",encoding="utf-8") as f: json.dump(resultados,f,indent=2,ensure_ascii=False)
     assert gastado <= PRESUPUESTO + 1e-6
     print(f"Holdout ganancia neta: ${holdout['ganancia_neta']:,.2f}; ROI {holdout['roi_sobre_capital_prestado']:.2%}")

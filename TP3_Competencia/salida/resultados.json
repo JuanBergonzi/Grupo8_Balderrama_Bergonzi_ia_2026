@@ -1,9 +1,12 @@
 {
-  "modelo": "DecisionTreeClassifier",
+  "modelo": "RandomForestClassifier",
   "parametros": {
-    "max_depth": 6,
-    "min_samples_leaf": 40,
-    "class_weight": null
+    "n_estimators": 200,
+    "max_depth": 16,
+    "min_samples_leaf": 60,
+    "max_features": "sqrt",
+    "class_weight": null,
+    "random_state": 42
   },
   "n_train": 32416,
   "n_test": 3061,
@@ -16,57 +19,57 @@
   },
   "criterio_seleccion": "maximizar ganancia esperada total; reglas ponderadas 1:1:1 como desempate marginal",
   "holdout": {
-    "ganancia_neta": 433660.68999999994,
-    "roi_sobre_capital_prestado": 0.21683034499999998,
-    "aprobadas": 37,
+    "ganancia_neta": 449628.44999999995,
+    "roi_sobre_capital_prestado": 0.22481422499999998,
+    "aprobadas": 142,
     "monto_aprobado": 2000000.0,
-    "ganancia_esperada": 647484.9610874583
+    "ganancia_esperada": 545440.4853891532
   },
   "cv_5_folds": {
-    "ganancia_neta_media": 515843.8300000001,
-    "roi_medio": 0.257921915,
+    "ganancia_neta_media": 532877.882,
+    "roi_medio": 0.26644160958762936,
     "detalle_folds": [
       {
-        "ganancia_neta": 501079.21,
-        "roi_sobre_capital_prestado": 0.250539605,
-        "aprobadas": 110,
-        "monto_aprobado": 2000000.0,
-        "ganancia_esperada": 567549.0557335278
+        "ganancia_neta": 533690.84,
+        "roi_sobre_capital_prestado": 0.26685876293814687,
+        "aprobadas": 157,
+        "monto_aprobado": 1999900.0,
+        "ganancia_esperada": 529656.4948038127
       },
       {
-        "ganancia_neta": 510814.88,
-        "roi_sobre_capital_prestado": 0.25540744,
-        "aprobadas": 83,
+        "ganancia_neta": 516966.56,
+        "roi_sobre_capital_prestado": 0.25848328,
+        "aprobadas": 130,
         "monto_aprobado": 2000000.0,
-        "ganancia_esperada": 560336.3872627171
+        "ganancia_esperada": 533560.5023485941
       },
       {
-        "ganancia_neta": 528750.52,
-        "roi_sobre_capital_prestado": 0.26437526,
-        "aprobadas": 68,
+        "ganancia_neta": 560354.8700000001,
+        "roi_sobre_capital_prestado": 0.28017743500000003,
+        "aprobadas": 172,
         "monto_aprobado": 2000000.0,
-        "ganancia_esperada": 589063.7648828689
+        "ganancia_esperada": 528841.6932814207
       },
       {
-        "ganancia_neta": 506210.76,
-        "roi_sobre_capital_prestado": 0.25310538,
-        "aprobadas": 60,
+        "ganancia_neta": 582339.6000000001,
+        "roi_sobre_capital_prestado": 0.29116980000000003,
+        "aprobadas": 159,
         "monto_aprobado": 2000000.0,
-        "ganancia_esperada": 600976.2927196411
+        "ganancia_esperada": 528528.9705909248
       },
       {
-        "ganancia_neta": 532363.78,
-        "roi_sobre_capital_prestado": 0.26618189000000003,
-        "aprobadas": 61,
+        "ganancia_neta": 471037.54,
+        "roi_sobre_capital_prestado": 0.23551877,
+        "aprobadas": 153,
         "monto_aprobado": 2000000.0,
-        "ganancia_esperada": 587825.6921286085
+        "ganancia_esperada": 534594.9648716752
       }
     ]
   },
   "test": {
-    "aprobadas": 608,
+    "aprobadas": 649,
     "monto_aprobado": 2000000.0,
     "presupuesto_restante": 0.0,
-    "ganancia_esperada_total": 510231.03115367016
+    "ganancia_esperada_total": 512697.5559620558
   }
 }
